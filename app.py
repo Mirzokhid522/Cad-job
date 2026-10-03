@@ -8,10 +8,18 @@ app = Flask(__name__)
 
 STATCAN_API_URL = "https://www150.statcan.gc.ca/t1/wds/rest/getFullTableDownloadCSV/14100287/en"
 
+# Global cache so we only download & process once on startup (prevents Render timeouts)
+CACHED_DATA = None
+
 
 def fetch_latest_labor_data():
+  global CACHED_DATA
+  if CACHED_DATA is not None:
+    print("-> Serving data from global cache...")
+    return CACHED_DATA
+
   print("-> Requesting download link from StatCan API...")
-  response = requests.get(STATCAN_API_URL, timeout=20)
+  response = requests.get(STATCAN_API_URL, timeout=30)
   response.raise_for_status()
   api_result = response.json()
 
@@ -20,7 +28,7 @@ def fetch_latest_labor_data():
     raise ValueError(f"StatCan API response missing 'object' key: {api_result}")
 
   print(f"-> Downloading bulk CSV zip from: {csv_zip_url}")
-  zip_resp = requests.get(csv_zip_url, timeout=60)
+  zip_resp = requests.get(csv_zip_url, timeout=120)
   zip_resp.raise_for_status()
 
   print("-> Extracting zip archive in memory...")
@@ -28,9 +36,22 @@ def fetch_latest_labor_data():
     csv_filename = [
         name for name in z.namelist() if name.endswith(".csv") and "sub" not in name
     ][0]
-    print(f"-> Reading CSV file inside zip: {csv_filename}")
+    print(f"-> Reading CSV file inside zip efficiently: {csv_filename}")
+
+    # Load only necessary columns to minimize memory consumption on Render
+    use_cols = [
+        "REF_DATE",
+        "GEO",
+        "Labour force characteristics",
+        "Gender",
+        "Age group",
+        "Data type",
+        "VALUE",
+    ]
     with z.open(csv_filename) as f:
-      df = pd.read_csv(f, low_memory=False)
+      df = pd.read_csv(
+          f, usecols=use_cols, dtype={"VALUE": "float32"}, low_memory=True
+      )
 
   print(f"-> Raw DataFrame loaded with {len(df):,} rows. Cleaning & filtering...")
 
@@ -78,14 +99,14 @@ def fetch_latest_labor_data():
   pivot_df["Month"] = pivot_df["REF_DATE"].dt.strftime("%b %Y")
   pivot_df = pivot_df.sort_values("REF_DATE")
 
-  data_payload = {
+  CACHED_DATA = {
       "months": pivot_df["Month"].tolist(),
       "unemployment_rate": pivot_df["Unemployment rate"].tolist(),
       "participation_rate": pivot_df["Participation rate"].tolist(),
       "employment_rate": pivot_df["Employment rate"].tolist(),
   }
-  print("-> Data payload successfully prepared!")
-  return data_payload
+  print("-> Data payload successfully prepared and cached!")
+  return CACHED_DATA
 
 
 @app.route("/")
