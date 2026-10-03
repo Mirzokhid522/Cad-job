@@ -13,7 +13,6 @@
             --notion-border: rgba(255, 255, 255, 0.08);
             --notion-text: #ffffff;
             --notion-text-muted: #9b9a97;
-            --accent-green: #2ecc71;
         }
 
         body {
@@ -21,66 +20,72 @@
             background-color: var(--notion-bg);
             color: var(--notion-text);
             margin: 0;
-            padding: 40px 24px;
+            padding: 24px 20px;
         }
 
         .header-container {
-            max-width: 1480px;
-            margin: 0 auto 35px auto;
+            max-width: 1400px;
+            margin: 0 auto 20px auto;
             display: flex;
             justify-content: space-between;
             align-items: flex-end;
             border-bottom: 1px solid var(--notion-border);
-            padding-bottom: 20px;
+            padding-bottom: 14px;
         }
 
         h1 {
-            font-size: 26px;
+            font-size: 22px;
             font-weight: 600;
-            margin: 0 0 6px 0;
+            margin: 0 0 4px 0;
         }
 
         .subtitle {
             color: var(--notion-text-muted);
-            font-size: 13px;
+            font-size: 12px;
             margin: 0;
         }
 
-        .status-badge {
-            background-color: rgba(46, 204, 113, 0.12);
-            color: var(--accent-green);
-            padding: 5px 10px;
-            border-radius: 4px;
-            font-size: 12px;
+        .release-info {
+            background-color: rgba(255, 255, 255, 0.05);
+            color: var(--notion-text-muted);
+            padding: 6px 12px;
+            border-radius: 6px;
+            font-size: 11px;
+            border: 1px solid var(--notion-border);
+            text-align: right;
+            line-height: 1.4;
+        }
+
+        .release-info span {
+            color: var(--notion-text);
             font-weight: 500;
-            border: 1px solid rgba(46, 204, 113, 0.25);
         }
 
         .dashboard-grid {
-            max-width: 1480px;
+            max-width: 1400px;
             margin: 0 auto;
             display: flex;
             flex-direction: column;
-            gap: 36px;
+            gap: 16px;
         }
 
         .card {
             background-color: var(--notion-card);
             border: 1px solid var(--notion-border);
             border-radius: 8px;
-            padding: 24px 24px 20px 24px;
-            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+            padding: 16px 20px 12px 20px;
+            box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
         }
 
         .card-header-row {
             display: flex;
             justify-content: space-between;
             align-items: flex-start;
-            margin-bottom: 16px;
+            margin-bottom: 8px;
         }
 
         .card-title {
-            font-size: 17px;
+            font-size: 15px;
             font-weight: 600;
             margin: 0 0 2px 0;
             color: #f3f3f3;
@@ -88,36 +93,21 @@
 
         .card-desc {
             color: var(--notion-text-muted);
-            font-size: 12px;
+            font-size: 11px;
             margin: 0;
-        }
-
-        .card-action-btn {
-            background: #528bff;
-            border: none;
-            color: white;
-            width: 28px;
-            height: 28px;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 14px;
-            cursor: pointer;
-            box-shadow: 0 2px 6px rgba(0,0,0,0.3);
         }
 
         .chart-container {
             position: relative;
-            height: 440px;
+            height: 200px;
             width: 100%;
         }
 
         .loading {
             text-align: center;
             color: var(--notion-text-muted);
-            padding: 80px;
-            font-size: 14px;
+            padding: 40px;
+            font-size: 13px;
         }
     </style>
 </head>
@@ -126,16 +116,65 @@
     <div class="header-container">
         <div>
             <h1>Canada Labour Market Tracker</h1>
-            <p class="subtitle">Live Feed: Statistics Canada Table 14-10-0287-01 (Seasonally Adjusted)</p>
+            <p class="subtitle">Statistics Canada Table 14-10-0287-01 (Seasonally Adjusted)</p>
         </div>
-        <div class="status-badge">● Live API Synced</div>
+        <div class="release-info" id="releaseTracker">
+            Latest Release: <span id="latestReleaseText">Loading...</span><br>
+            Upcoming Release: <span id="upcomingReleaseText">Loading...</span>
+        </div>
     </div>
 
     <div class="dashboard-grid" id="dashboard">
-        <div class="loading">Loading live macroeconomic data...</div>
+        <div class="loading">Loading macroeconomic data...</div>
     </div>
 
     <script>
+        // Automatically calculate Statistics Canada LFS release schedule
+        // StatCan LFS is typically released on the second Friday of each month.
+        function updateReleaseSchedule() {
+            const now = new Date();
+            let year = now.getFullYear();
+            let month = now.getMonth(); // 0-indexed
+
+            function getSecondFriday(y, m) {
+                let d = new Date(y, m, 1);
+                let count = 0;
+                while (d.getMonth() === m) {
+                    if (d.getDay() === 5) { // Friday
+                        count++;
+                        if (count === 2) return d;
+                    }
+                    d.setDate(d.getDate() + 1);
+                }
+                return null;
+            }
+
+            let currentMonthSecondFriday = getSecondFriday(year, month);
+            
+            let latest, upcoming;
+            if (now >= currentMonthSecondFriday) {
+                latest = currentMonthSecondFriday;
+                // Next is second Friday of next month
+                let nextMonth = month + 1;
+                let nextYear = year;
+                if (nextMonth > 11) { nextMonth = 0; nextYear++; }
+                upcoming = getSecondFriday(nextYear, nextMonth);
+            } else {
+                upcoming = currentMonthSecondFriday;
+                // Previous month's second Friday
+                let prevMonth = month - 1;
+                let prevYear = year;
+                if (prevMonth < 0) { prevMonth = 11; prevYear--; }
+                latest = getSecondFriday(prevYear, prevMonth);
+            }
+
+            const options = { year: 'numeric', month: 'short', day: 'numeric' };
+            document.getElementById('latestReleaseText').innerText = latest.toLocaleDateString('en-CA', options);
+            document.getElementById('upcomingReleaseText').innerText = upcoming.toLocaleDateString('en-CA', options);
+        }
+
+        updateReleaseSchedule();
+
         async function loadDashboardData() {
             try {
                 const response = await fetch('/api/labor-data');
@@ -154,7 +193,6 @@
                                 <h3 class="card-title">Unemployment Rate (%)</h3>
                                 <p class="card-desc">Share of labor force without work</p>
                             </div>
-                            <button class="card-action-btn">−</button>
                         </div>
                         <div class="chart-container">
                             <canvas id="unemploymentChart"></canvas>
@@ -166,7 +204,6 @@
                                 <h3 class="card-title">Participation Rate (%)</h3>
                                 <p class="card-desc">Active working-age population share</p>
                             </div>
-                            <button class="card-action-btn">−</button>
                         </div>
                         <div class="chart-container">
                             <canvas id="participationChart"></canvas>
@@ -178,7 +215,6 @@
                                 <h3 class="card-title">Employment Rate (%)</h3>
                                 <p class="card-desc">Employed share of total population (15+)</p>
                             </div>
-                            <button class="card-action-btn">−</button>
                         </div>
                         <div class="chart-container">
                             <canvas id="employmentChart"></canvas>
@@ -186,11 +222,10 @@
                     </div>
                 `;
 
-                // Helper to compute dynamic bounds so small shifts are heavily exaggerated and clear
                 function getAxisBounds(values) {
                     const min = Math.min(...values);
                     const max = Math.max(...values);
-                    const padding = (max - min) * 0.4 || 0.5;
+                    const padding = (max - min) * 0.5 || 0.5;
                     return {
                         min: Math.floor((min - padding) * 10) / 10,
                         max: Math.ceil((max + padding) * 10) / 10
@@ -200,6 +235,27 @@
                 function createMixedChart(canvasId, values, barColorHex, barRgba) {
                     const bounds = getAxisBounds(values);
 
+                    const valueLabelPlugin = {
+                        id: `valueLabel_${canvasId}`,
+                        afterDatasetsDraw(chart) {
+                            const { ctx, data } = chart;
+                            ctx.save();
+                            ctx.font = 'bold 9px sans-serif';
+                            ctx.fillStyle = '#ffffff';
+                            ctx.textAlign = 'center';
+                            ctx.textBaseline = 'bottom';
+
+                            const metaBars = chart.getDatasetMeta(0);
+                            metaBars.data.forEach((bar, index) => {
+                                const val = data.datasets[0].data[index];
+                                if (val !== null && val !== undefined) {
+                                    ctx.fillText(val.toFixed(1) + '%', bar.x, bar.y - 3);
+                                }
+                            });
+                            ctx.restore();
+                        }
+                    };
+
                     return new Chart(document.getElementById(canvasId), {
                         type: 'bar',
                         data: {
@@ -207,7 +263,7 @@
                             datasets: [
                                 {
                                     type: 'bar',
-                                    label: 'Monthly Data',
+                                    label: 'Monthly',
                                     data: values,
                                     backgroundColor: barRgba,
                                     borderColor: barColorHex,
@@ -223,7 +279,7 @@
                                     data: values,
                                     borderColor: '#f1c40f',
                                     backgroundColor: 'transparent',
-                                    borderWidth: 2.5,
+                                    borderWidth: 2,
                                     pointRadius: 2,
                                     pointHoverRadius: 5,
                                     pointBackgroundColor: '#f1c40f',
@@ -243,27 +299,40 @@
                                 legend: { display: false },
                                 tooltip: {
                                     backgroundColor: 'rgba(24, 24, 24, 0.95)',
-                                    titleFont: { size: 12 },
-                                    bodyFont: { size: 13, weight: '600' },
-                                    padding: 12,
+                                    titleFont: { size: 11 },
+                                    bodyFont: { size: 12, weight: '600' },
+                                    padding: 8,
                                     borderColor: 'rgba(255, 255, 255, 0.15)',
                                     borderWidth: 1,
-                                    cornerRadius: 4
+                                    cornerRadius: 4,
+                                    callbacks: {
+                                        label: function(context) {
+                                            let label = context.dataset.label || '';
+                                            if (label) {
+                                                label += ': ';
+                                            }
+                                            if (context.parsed.y !== null) {
+                                                label += context.parsed.y.toFixed(1) + '%';
+                                            }
+                                            return label;
+                                        }
+                                    }
                                 }
                             },
                             scales: {
                                 x: {
-                                    grid: { color: 'rgba(255, 255, 255, 0.05)', drawBorder: false },
-                                    ticks: { color: '#8b8a87', font: { size: 11 }, maxTicksLimit: 14 }
+                                    grid: { display: false },
+                                    ticks: { color: '#8b8a87', font: { size: 9 }, maxTicksLimit: 14 }
                                 },
                                 y: {
                                     min: bounds.min,
                                     max: bounds.max,
-                                    grid: { color: 'rgba(255, 255, 255, 0.05)', drawBorder: false },
-                                    ticks: { color: '#8b8a87', font: { size: 11 }, padding: 6 }
+                                    grid: { color: 'rgba(255, 255, 255, 0.03)', drawBorder: false },
+                                    ticks: { color: '#8b8a87', font: { size: 9 }, padding: 4 }
                                 }
                             }
-                        }
+                        },
+                        plugins: [valueLabelPlugin]
                     });
                 }
 
