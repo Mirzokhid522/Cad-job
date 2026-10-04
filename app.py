@@ -3,27 +3,38 @@ import zipfile
 import pandas as pd
 import requests
 from flask import Flask, jsonify, render_template
+from requests.adapters import HTTPAdapter, Retry
 
 app = Flask(__name__)
 
 STATCAN_API_URL = "https://www150.statcan.gc.ca/t1/wds/rest/getFullTableDownloadCSV/14100287/en"
 CACHED_DATA = None
 
+def get_robust_session():
+    session = requests.Session()
+    retries = Retry(total=3, backoff_factor=2, status_forcelist=[500, 502, 503, 504])
+    session.mount("https://", HTTPAdapter(max_retries=retries))
+    return session
+
 def load_and_cache_data():
     global CACHED_DATA
+    if CACHED_DATA is not None:
+        return True
+
+    session = get_robust_session()
     try:
         print("-> [Startup] Requesting download link from StatCan API...")
-        response = requests.get(STATCAN_API_URL, timeout=30)
+        response = session.get(STATCAN_API_URL, timeout=30)
         response.raise_for_status()
         api_result = response.json()
 
         csv_zip_url = api_result.get("object")
         if not csv_zip_url:
             print(f"[ERROR] StatCan API response missing 'object': {api_result}")
-            return
+            return False
 
-        print(f"-> [Startup] Downloading bulk CSV zip from StatCan...")
-        zip_resp = requests.get(csv_zip_url, timeout=120)
+        print("-> [Startup] Downloading bulk CSV zip from StatCan...")
+        zip_resp = session.get(csv_zip_url, timeout=120)
         zip_resp.raise_for_status()
 
         print("-> [Startup] Extracting zip archive in memory...")
@@ -36,7 +47,6 @@ def load_and_cache_data():
             print("-> [Startup] Processing CSV in low-memory chunks...")
             filtered_chunks = []
             
-            # Read in chunks of 100,000 rows to stay well under Render's 512MB limit
             with z.open(csv_filename) as f:
                 for chunk in pd.read_csv(f, usecols=use_cols, dtype={"VALUE": "float32"}, chunksize=100000, low_memory=True):
                     chunk["REF_DATE"] = pd.to_datetime(chunk["REF_DATE"])
@@ -56,7 +66,7 @@ def load_and_cache_data():
 
         if not filtered_chunks:
             print("[ERROR] Filtering resulted in 0 rows!")
-            return
+            return False
 
         sub_df = pd.concat(filtered_chunks, ignore_index=True)
 
@@ -76,12 +86,11 @@ def load_and_cache_data():
             "participation_rate": pivot_df["Participation rate"].tolist(),
             "employment_rate": pivot_df["Employment rate"].tolist(),
         }
-        print("-> [Startup] Data successfully processed and cached under 512MB!")
+        print("-> [Startup] Data successfully processed and cached!")
+        return True
     except Exception as e:
-        print(f"[CRITICAL ERROR during startup cache]: {e}")
-
-# Pre-fetch data immediately on server boot
-load_and_cache_data()
+        print(f"[CRITICAL ERROR during cache load]: {e}")
+        return False
 
 @app.route("/")
 def index():
@@ -90,10 +99,9 @@ def index():
 @app.route("/api/labor-data")
 def get_labor_data():
     if CACHED_DATA is None:
-        load_and_cache_data()
-    
-    if CACHED_DATA is None:
-        return jsonify({"error": "Data failed to initialize due to memory limits. Check Render logs."}), 500
+        success = load_and_cache_data()
+        if not success or CACHED_DATA is None:
+            return jsonify({"error": "Data failed to initialize due to network or memory limits. Check Render logs."}), 500
         
     return jsonify(CACHED_DATA)
 
