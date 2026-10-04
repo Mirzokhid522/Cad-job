@@ -1,5 +1,6 @@
 import io
 import zipfile
+import threading
 import pandas as pd
 import requests
 from flask import Flask, jsonify, render_template
@@ -9,6 +10,7 @@ app = Flask(__name__)
 
 STATCAN_API_URL = "https://www150.statcan.gc.ca/t1/wds/rest/getFullTableDownloadCSV/14100287/en"
 CACHED_DATA = None
+DATA_LOADING = False
 
 def get_robust_session():
     session = requests.Session()
@@ -17,13 +19,14 @@ def get_robust_session():
     return session
 
 def load_and_cache_data():
-    global CACHED_DATA
-    if CACHED_DATA is not None:
-        return True
+    global CACHED_DATA, DATA_LOADING
+    if CACHED_DATA is not None or DATA_LOADING:
+        return
 
+    DATA_LOADING = True
     session = get_robust_session()
     try:
-        print("-> [Startup] Requesting download link from StatCan API...")
+        print("-> [Background] Requesting download link from StatCan API...")
         response = session.get(STATCAN_API_URL, timeout=30)
         response.raise_for_status()
         api_result = response.json()
@@ -31,20 +34,21 @@ def load_and_cache_data():
         csv_zip_url = api_result.get("object")
         if not csv_zip_url:
             print(f"[ERROR] StatCan API response missing 'object': {api_result}")
-            return False
+            DATA_LOADING = False
+            return
 
-        print("-> [Startup] Downloading bulk CSV zip from StatCan...")
+        print("-> [Background] Downloading bulk CSV zip from StatCan...")
         zip_resp = session.get(csv_zip_url, timeout=120)
         zip_resp.raise_for_status()
 
-        print("-> [Startup] Extracting zip archive in memory...")
+        print("-> [Background] Extracting zip archive in memory...")
         with zipfile.ZipFile(io.BytesIO(zip_resp.content)) as z:
             csv_filename = [name for name in z.namelist() if name.endswith(".csv") and "sub" not in name][0]
             
             use_cols = ["REF_DATE", "GEO", "Labour force characteristics", "Gender", "Age group", "Data type", "VALUE"]
             indicators = ["Unemployment rate", "Participation rate", "Employment rate"]
             
-            print("-> [Startup] Processing CSV in low-memory chunks...")
+            print("-> [Background] Processing CSV in low-memory chunks...")
             filtered_chunks = []
             
             with z.open(csv_filename) as f:
@@ -66,7 +70,8 @@ def load_and_cache_data():
 
         if not filtered_chunks:
             print("[ERROR] Filtering resulted in 0 rows!")
-            return False
+            DATA_LOADING = False
+            return
 
         sub_df = pd.concat(filtered_chunks, ignore_index=True)
 
@@ -86,11 +91,14 @@ def load_and_cache_data():
             "participation_rate": pivot_df["Participation rate"].tolist(),
             "employment_rate": pivot_df["Employment rate"].tolist(),
         }
-        print("-> [Startup] Data successfully processed and cached!")
-        return True
+        print("-> [Background] Data successfully processed and cached!")
     except Exception as e:
-        print(f"[CRITICAL ERROR during cache load]: {e}")
-        return False
+        print(f"[CRITICAL ERROR during background cache load]: {e}")
+    finally:
+        DATA_LOADING = False
+
+# Kick off background data loading immediately without blocking startup
+threading.Thread(target=load_and_cache_data, daemon=True).start()
 
 @app.route("/")
 def index():
@@ -99,9 +107,14 @@ def index():
 @app.route("/api/labor-data")
 def get_labor_data():
     if CACHED_DATA is None:
-        success = load_and_cache_data()
-        if not success or CACHED_DATA is None:
-            return jsonify({"error": "Data failed to initialize due to network or memory limits. Check Render logs."}), 500
+        if DATA_LOADING:
+            return jsonify({"status": "loading", "message": "Data is currently downloading in the background. Please try again in a few seconds."}), 202
+        else:
+            # Retry loading synchronously if it failed earlier
+            load_and_cache_data()
+            
+    if CACHED_DATA is None:
+        return jsonify({"error": "Data failed to initialize due to network or memory limits. Check Render logs."}), 500
         
     return jsonify(CACHED_DATA)
 
